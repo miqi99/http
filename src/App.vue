@@ -1008,7 +1008,7 @@ async function sendRequest() {
               <div class="mb-3 flex items-center justify-between gap-4">
                 <div>
                   <h3 class="text-sm font-semibold">请求头</h3>
-                  <p class="text-xs text-slate-500">可不填写，至少保留一行。用户填写 Content-Type 时会优先生效。</p>
+                  <p class="text-xs text-slate-500">可不填写 用户填写 Content-Type 时会优先生效。</p>
                 </div>
                 <button
                   type="button"
