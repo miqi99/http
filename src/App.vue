@@ -429,7 +429,7 @@ function restoreHistory(index) {
   formParams.value = Array.isArray(entry.formParams) && entry.formParams.length > 0
     ? entry.formParams
     : [{ key: '', value: '' }]
-  jsonBody.value = entry.jsonBody || '{\n  \n}'
+  jsonBody.value = entry.jsonBody || ''
   response.value = ''
   responseTab.value = 'body'
   showHistoryModal.value = false
@@ -451,7 +451,7 @@ function clearAll() {
   cookie.value = ''
   cookieEnabled.value = false
   formParams.value = [{ key: '', value: '' }]
-  jsonBody.value = '{\n  \n}'
+  jsonBody.value = ''
   formatRequestJson.value = false
   response.value = ''
   responseTab.value = 'body'
