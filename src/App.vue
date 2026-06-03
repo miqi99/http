@@ -84,7 +84,7 @@ const urlError = computed(() => {
     new URL(raw)
     return ''
   } catch {
-    return '地址格式不正确，需要包含协议，例如 https://api.example.com'
+    return '地址格式不正确，需要包含协议，例如 https://api.xxx.com'
   }
 })
 
