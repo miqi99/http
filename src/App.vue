@@ -8,8 +8,11 @@ const HISTORY_KEY = 'http-client-history'
 // 是否启用持久配置
 const persistConfig = ref(false)
 
-// 请求地址
+// 请求地址（不含协议）
 const url = ref('')
+
+// 协议：http 或 https
+const protocol = ref('https')
 
 // 请求方式：GET / POST
 const method = ref('GET')
@@ -20,10 +23,8 @@ const accessMode = ref('direct')
 // 参数类型：none = 无参数，form = 表单，json = JSON
 const paramType = ref('none')
 
-// 请求头，最少保留一行，可不填写
-const headers = ref([
-  { key: '', value: '' }
-])
+// 请求头，可不填写
+const headers = ref([])
 
 // Cookie，单独输入，最终会作为 Cookie 请求头发送
 const cookie = ref('')
@@ -76,15 +77,31 @@ const copyTip = ref('')
 // 是否完成初始化，避免刚打开页面时覆盖持久配置
 const initialized = ref(false)
 
+// 清理 URL（去掉 http:// 或 https://）
+function normalizeUrl(raw) {
+  const trimmed = raw.trim()
+  if (trimmed.startsWith('https://')) return trimmed.slice(8)
+  if (trimmed.startsWith('http://')) return trimmed.slice(7)
+  return trimmed
+}
+
+// 监听 URL 变化，自动去掉协议
+watch(url, (newVal) => {
+  const cleaned = normalizeUrl(newVal)
+  if (cleaned !== newVal) {
+    url.value = cleaned
+  }
+})
+
 // URL 合法性校验
 const urlError = computed(() => {
   const raw = url.value.trim()
   if (!raw) return ''
   try {
-    new URL(raw)
+    new URL(`${protocol.value}://${raw}`)
     return ''
   } catch {
-    return '地址格式不正确，需要包含协议，例如 https://api.xxx.com'
+    return '地址格式不正确，例如 api.example.com 或 api.example.com/path'
   }
 })
 
@@ -157,13 +174,14 @@ onMounted(() => {
 
       persistConfig.value = Boolean(config.persistConfig)
       url.value = config.url || ''
+      protocol.value = config.protocol || 'https'
       method.value = config.method || 'GET'
       accessMode.value = config.accessMode || 'direct'
       paramType.value = config.paramType || 'none'
 
       headers.value = Array.isArray(config.headers) && config.headers.length > 0
         ? config.headers
-        : [{ key: '', value: '' }]
+        : []
 
       cookie.value = config.cookie || ''
       cookieEnabled.value = Boolean(config.cookieEnabled)
@@ -199,6 +217,7 @@ watch(
   [
     persistConfig,
     url,
+    protocol,
     method,
     accessMode,
     paramType,
@@ -223,6 +242,7 @@ watch(
     const config = {
       persistConfig: persistConfig.value,
       url: url.value,
+      protocol: protocol.value,
       method: method.value,
       accessMode: accessMode.value,
       paramType: paramType.value,
@@ -418,12 +438,13 @@ function restoreHistory(index) {
   }
 
   url.value = entry.url || ''
+  protocol.value = entry.protocol || 'https'
   method.value = entry.method || 'GET'
   accessMode.value = entry.accessMode || 'direct'
   paramType.value = entry.paramType || 'none'
   headers.value = Array.isArray(entry.headers) && entry.headers.length > 0
     ? entry.headers
-    : [{ key: '', value: '' }]
+    : []
   cookie.value = entry.cookie || ''
   cookieEnabled.value = Boolean(entry.cookie)
   formParams.value = Array.isArray(entry.formParams) && entry.formParams.length > 0
@@ -444,10 +465,11 @@ function clearHistory() {
 // 一键清空当前输入和返回结果
 function clearAll() {
   url.value = ''
+  protocol.value = 'https'
   method.value = 'GET'
   accessMode.value = 'direct'
   paramType.value = 'none'
-  headers.value = [{ key: '', value: '' }]
+  headers.value = []
   cookie.value = ''
   cookieEnabled.value = false
   formParams.value = [{ key: '', value: '' }]
@@ -736,7 +758,7 @@ async function sendRequest() {
     const requestHeaders = buildHeaders()
     const body = buildBody()
 
-    let requestUrl = url.value.trim()
+    let requestUrl = `${protocol.value}://${url.value.trim()}`
 
     if (method.value !== 'POST' && paramType.value === 'form') {
       const params = new URLSearchParams()
@@ -818,10 +840,30 @@ async function sendRequest() {
           <h1 class="text-lg font-bold tracking-tight">HTTP 请求测试工具</h1>
           <p class="text-xs text-slate-400">GET / POST · 请求头 · Cookie · 表单 · JSON · CURL 导入</p>
         </div>
-        <label class="flex cursor-pointer items-center gap-2 rounded-full bg-slate-100 px-4 py-2 text-sm text-slate-600 ring-1 ring-slate-200 hover:bg-slate-200 transition">
-          <input v-model="persistConfig" type="checkbox" class="h-4 w-4">
-          持久配置
-        </label>
+        <div class="flex items-center gap-3">
+          <div class="flex items-center gap-2">
+            <button
+              type="button"
+              @click="openCurlModal"
+              class="rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-700 transition"
+            >CURL 导入</button>
+            <button
+              type="button"
+              @click="showHistoryModal = true"
+              class="rounded-lg bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50 transition"
+            >请求历史</button>
+            <button
+              type="button"
+              @click="clearAll"
+              class="rounded-lg bg-white px-3 py-1.5 text-xs font-semibold text-red-500 ring-1 ring-red-100 hover:bg-red-50 transition"
+            >一键清空</button>
+          </div>
+          <div class="w-px h-6 bg-slate-200" />
+          <label class="flex cursor-pointer items-center gap-2 rounded-full bg-slate-100 px-4 py-1.5 text-sm text-slate-600 ring-1 ring-slate-200 hover:bg-slate-200 transition">
+            <input v-model="persistConfig" type="checkbox" class="h-4 w-4">
+            持久配置
+          </label>
+        </div>
       </div>
     </header>
 
@@ -829,38 +871,10 @@ async function sendRequest() {
     <div class="flex-1 overflow-hidden">
       <div class="mx-auto flex h-full max-w-[1440px] gap-4 px-4 py-4">
 
-        <!-- ===== 左栏：工具 + 响应结果 ===== -->
-        <div class="flex h-full w-[420px] shrink-0 flex-col gap-3">
+        <!-- ===== 左栏：响应结果 ===== -->
+        <div class="flex h-full w-[420px] shrink-0 flex-col">
 
-          <!-- 工具按钮 -->
-          <div class="shrink-0 rounded-2xl bg-white p-4 shadow-sm ring-1 ring-slate-200">
-            <p class="mb-3 text-xs font-semibold uppercase tracking-widest text-slate-400">工具</p>
-            <div class="grid grid-cols-3 gap-2">
-              <button
-                type="button"
-                @click="openCurlModal"
-                class="rounded-xl bg-slate-900 px-3 py-2.5 text-xs font-semibold text-white hover:bg-slate-700 transition"
-              >
-                CURL 导入
-              </button>
-              <button
-                type="button"
-                @click="showHistoryModal = true"
-                class="rounded-xl bg-white px-3 py-2.5 text-xs font-semibold text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50 transition"
-              >
-                请求历史
-              </button>
-              <button
-                type="button"
-                @click="clearAll"
-                class="rounded-xl bg-white px-3 py-2.5 text-xs font-semibold text-red-500 ring-1 ring-red-100 hover:bg-red-50 transition"
-              >
-                一键清空
-              </button>
-            </div>
-          </div>
-
-          <!-- 响应结果（撑满剩余高度） -->
+          <!-- 响应结果（撑满整个高度） -->
           <div class="flex min-h-0 flex-1 flex-col rounded-2xl bg-white p-4 shadow-sm ring-1 ring-slate-200">
 
             <!-- Tab 切换 + 操作按钮 -->
@@ -954,14 +968,23 @@ async function sendRequest() {
             <!-- 请求地址 -->
             <div class="mb-5">
               <label class="mb-2 block text-sm font-medium">请求地址</label>
-              <input
-                v-model="url"
-                :class="urlError
-                  ? 'border-red-400 focus:border-red-400 focus:ring-red-100'
-                  : 'border-slate-300 focus:border-blue-500 focus:ring-blue-100'"
-                class="w-full rounded-xl border bg-white px-4 py-3 text-sm outline-none transition focus:ring-4"
-                placeholder="https://api.example.com"
-              >
+              <div class="flex gap-2">
+                <select
+                  v-model="protocol"
+                  class="shrink-0 rounded-xl border border-slate-300 bg-white px-3 py-3 text-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+                >
+                  <option value="https">https://</option>
+                  <option value="http">http://</option>
+                </select>
+                <input
+                  v-model="url"
+                  :class="urlError
+                    ? 'border-red-400 focus:border-red-400 focus:ring-red-100'
+                    : 'border-slate-300 focus:border-blue-500 focus:ring-blue-100'"
+                  class="flex-1 rounded-xl border bg-white px-4 py-3 text-sm outline-none transition focus:ring-4"
+                  placeholder="api.example.com"
+                >
+              </div>
               <p v-if="urlError" class="mt-1.5 text-xs text-red-500">{{ urlError }}</p>
             </div>
 
@@ -1148,7 +1171,6 @@ async function sendRequest() {
                 :value="displayRequestJson"
                 rows="10"
                 class="w-full rounded-xl border border-slate-300 bg-slate-950 p-4 font-mono text-sm text-slate-100 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
-                placeholder="{&#10;  &quot;name&quot;: &quot;test&quot;&#10;}"
                 @input="jsonBody = $event.target.value"
               />
             </div>
@@ -1179,52 +1201,86 @@ async function sendRequest() {
       v-if="showHistoryModal"
       class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 px-4"
     >
-      <div class="w-full max-w-4xl rounded-2xl bg-white p-6 shadow-xl">
-        <div class="mb-4 flex items-center justify-between gap-4">
+      <div class="w-full max-w-5xl rounded-2xl bg-white p-6 shadow-xl">
+        <div class="mb-6 flex items-center justify-between gap-4">
           <div>
             <h2 class="text-lg font-semibold">请求历史</h2>
-            <p class="mt-1 text-sm text-slate-500">最近 20 条请求记录，点击恢复可填回当前页面</p>
+            <p class="mt-1 text-sm text-slate-500">最近 20 条请求记录</p>
           </div>
-          <button
-            type="button"
-            @click="showHistoryModal = false"
-            class="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-600 hover:bg-slate-100"
-          >关闭</button>
+          <div class="flex items-center gap-2">
+            <button
+              type="button"
+              @click="clearHistory"
+              class="rounded-lg bg-red-500 px-3 py-2 text-sm font-semibold text-white hover:bg-red-400 transition"
+            >清空历史</button>
+            <button
+              type="button"
+              @click="showHistoryModal = false"
+              class="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-600 hover:bg-slate-100 transition"
+            >关闭</button>
+          </div>
         </div>
-        <div class="mb-4 flex justify-end">
-          <button
-            type="button"
-            @click="clearHistory"
-            class="rounded-lg bg-red-500 px-3 py-2 text-sm font-semibold text-white hover:bg-red-400"
-          >清空历史</button>
-        </div>
+
         <div
           v-if="historyList.length === 0"
-          class="rounded-xl border border-dashed border-slate-300 p-8 text-center text-sm text-slate-500"
-        >暂无请求历史</div>
-        <div v-else class="max-h-[520px] space-y-2 overflow-y-auto">
-          <div
-            v-for="(item, index) in historyList"
-            :key="index"
-            class="rounded-xl border border-slate-200 bg-slate-50 p-4"
-          >
-            <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <div class="min-w-0">
-                <div class="mb-1 flex items-center gap-2">
-                  <span
-                    :class="item.method === 'POST' ? 'bg-blue-100 text-blue-700' : 'bg-emerald-100 text-emerald-700'"
-                    class="rounded-full px-2 py-1 text-xs font-semibold"
-                  >{{ item.method }}</span>
-                  <span class="rounded-full bg-slate-200 px-2 py-1 text-xs text-slate-600">{{ item.paramType }}</span>
-                  <span class="text-xs text-slate-400">{{ item.time }}</span>
-                </div>
-                <div class="truncate font-mono text-sm text-slate-800">{{ item.url }}</div>
+          class="rounded-xl border border-dashed border-slate-300 p-12 text-center text-sm text-slate-500"
+        >
+          暂无请求历史
+        </div>
+
+        <div v-else class="overflow-hidden rounded-xl border border-slate-200">
+          <!-- 表头 -->
+          <div class="grid grid-cols-[80px_1fr_120px_100px] gap-4 bg-slate-50 px-4 py-3 text-xs font-semibold text-slate-600 uppercase tracking-wide border-b border-slate-200">
+            <div>方法</div>
+            <div>请求地址</div>
+            <div>参数类型</div>
+            <div class="text-right">操作</div>
+          </div>
+
+          <!-- 列表 -->
+          <div class="max-h-[600px] overflow-y-auto">
+            <div
+              v-for="(item, index) in historyList"
+              :key="index"
+              class="grid grid-cols-[80px_1fr_120px_100px] gap-4 items-center px-4 py-3 border-b border-slate-100 hover:bg-slate-50 transition"
+            >
+              <!-- 方法 -->
+              <div>
+                <span
+                  :class="item.method === 'POST' ? 'bg-blue-100 text-blue-700' : 'bg-emerald-100 text-emerald-700'"
+                  class="inline-block rounded-full px-2.5 py-1 text-xs font-semibold"
+                >
+                  {{ item.method }}
+                </span>
               </div>
-              <button
-                type="button"
-                @click="restoreHistory(index)"
-                class="shrink-0 rounded-lg bg-blue-600 px-3 py-2 text-sm font-semibold text-white hover:bg-blue-500"
-              >恢复</button>
+
+              <!-- URL -->
+              <div class="min-w-0">
+                <div class="truncate font-mono text-sm text-slate-800" :title="item.url">
+                  {{ item.url }}
+                </div>
+                <div class="mt-1 text-xs text-slate-400">
+                  {{ item.time }}
+                </div>
+              </div>
+
+              <!-- 参数类型 -->
+              <div>
+                <span class="inline-block rounded-full bg-slate-100 px-2.5 py-1 text-xs text-slate-600">
+                  {{ item.paramType }}
+                </span>
+              </div>
+
+              <!-- 操作 -->
+              <div class="text-right">
+                <button
+                  type="button"
+                  @click="restoreHistory(index)"
+                  class="rounded-lg bg-blue-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-blue-500 transition"
+                >
+                  恢复
+                </button>
+              </div>
             </div>
           </div>
         </div>
