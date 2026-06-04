@@ -318,6 +318,15 @@ async function sendRequest() {
   if (!url.value.trim()) { response.value = '请先输入请求地址'; responseTab.value = 'body'; return }
   if (urlError.value) { response.value = urlError.value; responseTab.value = 'body'; return }
   if (!validateJsonBeforeSend()) return
+  if (location.protocol === 'https:' && protocol.value === 'http') {
+    const host = url.value.trim().split('/')[0].split(':')[0]
+    const isLocal = host === 'localhost' || host === '127.0.0.1' || host.endsWith('.local')
+    response.value = isLocal
+      ? '请求被浏览器拦截（混合内容）\n\n当前页面通过 HTTPS 访问，无法向本地 HTTP 服务发送请求。\n\n解决方法：在本地运行 npm run dev，通过 http://localhost:5173 使用本工具。'
+      : '请求被浏览器拦截（混合内容）\n\n当前页面通过 HTTPS 访问，不允许向 HTTP 地址发送请求。\n\n请将目标接口改为 https://，或在本地运行本工具。'
+    responseTab.value = 'body'
+    return
+  }
 
   loading.value = true; timeout.value = false; response.value = '请求中...'; responseTab.value = 'body'
   responseInfo.value = { status: '', statusText: '', time: '', size: '', contentType: '', url: '' }
