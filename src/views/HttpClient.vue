@@ -28,20 +28,17 @@ const showCurlModal = ref(false)
 const curlText = ref('')
 const curlError = ref('')
 const historyList = ref([])
-const showHistoryModal = ref(false)
 const copyTip = ref('')
 const initialized = ref(false)
 
-function normalizeUrl(raw) {
-  const trimmed = raw.trim()
-  if (trimmed.startsWith('https://')) return trimmed.slice(8)
-  if (trimmed.startsWith('http://')) return trimmed.slice(7)
-  return trimmed
-}
-
 watch(url, (newVal) => {
-  const cleaned = normalizeUrl(newVal)
-  if (cleaned !== newVal) url.value = cleaned
+  if (/^https:\/\//i.test(newVal)) {
+    protocol.value = 'https'
+    url.value = newVal.replace(/^https:\/\//i, '')
+  } else if (/^http:\/\//i.test(newVal)) {
+    protocol.value = 'http'
+    url.value = newVal.replace(/^http:\/\//i, '')
+  }
 })
 
 const urlError = computed(() => {
@@ -138,9 +135,8 @@ function removeHeader(index) { headers.value.splice(index, 1) }
 function addFormParam() { formParams.value.push({ key: '', value: '' }) }
 function removeFormParam(index) { if (formParams.value.length > 1) formParams.value.splice(index, 1) }
 
-function applyRequestJsonFormat() {
-  if (!formatRequestJson.value) return
-  try { jsonBody.value = JSON.stringify(JSON.parse(jsonBody.value), null, 2) } catch {}
+function compressJson() {
+  try { jsonBody.value = JSON.stringify(JSON.parse(jsonBody.value)) } catch {}
 }
 
 function hasHeader(headersObject, headerName) {
@@ -181,12 +177,14 @@ function validateJsonBeforeSend() {
   catch (err) { response.value = `JSON 格式错误，已阻止发送：\n${err.message}`; responseTab.value = 'body'; return false }
 }
 
-function saveHistoryEntry() {
+function saveHistoryEntry(ok) {
   const entry = {
-    time: new Date().toLocaleString(), url: url.value, method: method.value,
+    time: new Date().toLocaleString(), url: url.value, protocol: protocol.value, method: method.value,
     accessMode: accessMode.value, paramType: paramType.value,
     headers: JSON.parse(JSON.stringify(headers.value)), cookie: cookie.value,
     formParams: JSON.parse(JSON.stringify(formParams.value)), jsonBody: jsonBody.value,
+    response: response.value, responseInfo: JSON.parse(JSON.stringify(responseInfo.value)),
+    ok,
   }
   historyList.value = [
     entry,
@@ -209,9 +207,9 @@ function restoreHistory(index) {
   formParams.value = Array.isArray(entry.formParams) && entry.formParams.length > 0
     ? entry.formParams : [{ key: '', value: '' }]
   jsonBody.value = entry.jsonBody || ''
-  response.value = ''
+  response.value = entry.response || ''
+  responseInfo.value = entry.responseInfo || { status: '', statusText: '', time: '', size: '', contentType: '', url: '' }
   responseTab.value = 'body'
-  showHistoryModal.value = false
 }
 
 function clearHistory() {
@@ -336,6 +334,7 @@ async function sendRequest() {
     loading.value = false; timeout.value = true
     response.value = '请求超过 5 秒，请重试'
     responseInfo.value = { ...responseInfo.value, time: `${Date.now() - startTime} ms`, size: formatSize(response.value) }
+    saveHistoryEntry(false)
   }, 5000)
 
   try {
@@ -362,7 +361,7 @@ async function sendRequest() {
       time: `${Date.now() - startTime} ms`, size: formatSize(text),
       contentType: res.headers.get('content-type') || '', url: res.url || url.value.trim(),
     }
-    saveHistoryEntry()
+    saveHistoryEntry(res.ok)
   } catch (err) {
     clearTimeout(timer); loading.value = false; timeout.value = false
     response.value = err.message || String(err)
@@ -371,293 +370,277 @@ async function sendRequest() {
       time: `${Date.now() - startTime} ms`, size: formatSize(response.value),
       contentType: '', url: url.value.trim(),
     }
+    saveHistoryEntry(false)
   }
 }
 </script>
 
 <template>
   <div class="h-full">
-  <div class="mx-auto flex h-full max-w-[1440px] gap-4 px-4 py-4">
+  <div class="mx-auto flex h-full max-w-[1600px] gap-3 px-3 py-3">
 
-    <!-- 左栏：返回结果 -->
-    <div class="flex h-full w-[420px] shrink-0 flex-col">
-      <div class="flex min-h-0 flex-1 flex-col rounded-2xl bg-white p-4 shadow-sm ring-1 ring-slate-200">
-
-        <div class="mb-3 flex shrink-0 items-center justify-between gap-2">
-          <div class="grid grid-cols-2 gap-1 rounded-xl bg-slate-100 p-1">
-            <button
-              type="button"
-              @click="responseTab = 'body'"
-              :class="responseTab === 'body' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'"
-              class="rounded-lg px-3 py-1.5 text-xs font-semibold transition"
-            >返回结果</button>
-            <button
-              type="button"
-              @click="responseTab = 'info'"
-              :class="responseTab === 'info' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'"
-              class="rounded-lg px-3 py-1.5 text-xs font-semibold transition"
-            >请求响应</button>
-          </div>
-          <div class="flex shrink-0 items-center gap-2">
-            <template v-if="responseTab === 'body'">
-              <span v-if="copyTip" class="text-xs text-slate-500">{{ copyTip }}</span>
-              <button
-                type="button"
-                @click="copyResponse"
-                class="rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-700 transition"
-              >复制</button>
-              <label class="flex items-center gap-1.5 text-xs text-slate-600 cursor-pointer">
-                <input v-model="formatResponseJson" type="checkbox" class="h-3.5 w-3.5">
-                格式化
-              </label>
-            </template>
-            <button
-              type="button"
-              @click="response = ''; responseInfo = { status: '', statusText: '', time: '', size: '', contentType: '', url: '' }"
-              class="rounded-lg border border-slate-200 px-2.5 py-1 text-xs text-slate-500 hover:bg-slate-100 transition"
-            >清空</button>
-          </div>
-        </div>
-
-        <textarea
-          v-if="responseTab === 'body'"
-          :value="displayResponse"
-          readonly
-          class="min-h-0 flex-1 w-full resize-none rounded-xl border border-slate-300 bg-slate-950 p-4 font-mono text-sm text-slate-100 outline-none"
-          placeholder="暂无返回结果"
-        />
-        <div
-          v-else
-          class="min-h-0 flex-1 overflow-y-auto rounded-xl border border-slate-300 bg-slate-50 p-3"
-        >
-          <div class="grid grid-cols-2 gap-2">
-            <div class="rounded-lg bg-white p-3 ring-1 ring-slate-200">
-              <div class="text-xs text-slate-500">状态码</div>
-              <div :class="statusColorClass" class="mt-1 font-mono text-sm font-semibold">{{ responseInfo.status || '-' }}</div>
-            </div>
-            <div class="rounded-lg bg-white p-3 ring-1 ring-slate-200">
-              <div class="text-xs text-slate-500">状态文本</div>
-              <div class="mt-1 font-mono text-sm text-slate-900">{{ responseInfo.statusText || '-' }}</div>
-            </div>
-            <div class="rounded-lg bg-white p-3 ring-1 ring-slate-200">
-              <div class="text-xs text-slate-500">响应时间</div>
-              <div class="mt-1 font-mono text-sm text-slate-900">{{ responseInfo.time || '-' }}</div>
-            </div>
-            <div class="rounded-lg bg-white p-3 ring-1 ring-slate-200">
-              <div class="text-xs text-slate-500">响应大小</div>
-              <div class="mt-1 font-mono text-sm text-slate-900">{{ responseInfo.size || '-' }}</div>
-            </div>
-            <div class="col-span-2 rounded-lg bg-white p-3 ring-1 ring-slate-200">
-              <div class="text-xs text-slate-500">Content-Type</div>
-              <div class="mt-1 break-all font-mono text-sm text-slate-900">{{ responseInfo.contentType || '-' }}</div>
-            </div>
-            <div class="col-span-2 rounded-lg bg-white p-3 ring-1 ring-slate-200">
-              <div class="text-xs text-slate-500">最终请求地址</div>
-              <div class="mt-1 break-all font-mono text-sm text-slate-900">{{ responseInfo.url || '-' }}</div>
-            </div>
-          </div>
-        </div>
-
+    <!-- 左栏：请求历史 -->
+    <aside class="flex h-full w-[240px] shrink-0 flex-col rounded-2xl bg-white shadow-sm ring-1 ring-slate-200">
+      <div class="flex shrink-0 items-center justify-between border-b border-slate-100 px-3 py-2.5">
+        <h3 class="text-sm font-semibold">请求历史</h3>
+        <button
+          type="button"
+          @click="clearHistory"
+          :disabled="historyList.length === 0"
+          :class="historyList.length === 0 ? 'cursor-not-allowed text-slate-300' : 'text-red-500 hover:bg-red-50'"
+          class="rounded-md px-2 py-1 text-xs font-medium transition"
+        >清空</button>
       </div>
-    </div>
-
-    <!-- 右栏：请求构建器 -->
-    <div class="flex-1 overflow-y-auto">
-      <div class="rounded-2xl bg-white shadow-sm ring-1 ring-slate-200">
-
-        <!-- Tab 行 + 操作按钮 -->
-        <div class="flex items-center justify-between border-b border-slate-100 px-4 py-2.5">
-          <div class="flex items-center gap-1">
-            <button
-              type="button"
-              class="rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white"
-            >HTTP</button>
-            <button
-              type="button"
-              @click="emit('changeTab', 'ws')"
-              class="rounded-lg px-3 py-1.5 text-xs font-semibold text-slate-500 hover:text-slate-800 hover:bg-slate-50 transition"
-            >WebSocket</button>
+      <div class="min-h-0 flex-1 overflow-y-auto p-2">
+        <div v-if="historyList.length === 0" class="px-2 py-10 text-center text-xs text-slate-400">暂无请求历史<br>发送成功后会自动记录</div>
+        <button
+          v-for="(item, index) in historyList"
+          :key="index"
+          type="button"
+          @click="restoreHistory(index)"
+          class="mb-1.5 block w-full rounded-lg border border-slate-200 px-2.5 py-2 text-left transition hover:border-blue-300 hover:bg-blue-50/60"
+        >
+          <div class="flex items-center gap-1.5">
+            <span :class="item.method === 'POST' ? 'bg-blue-100 text-blue-700' : 'bg-emerald-100 text-emerald-700'" class="inline-block rounded px-1.5 py-0.5 text-[11px] font-semibold">{{ item.method }}</span>
+            <span class="rounded bg-slate-100 px-1.5 py-0.5 text-[11px] text-slate-500">{{ item.paramType }}</span>
+            <span v-if="item.ok === true" class="ml-auto inline-flex items-center gap-1 rounded bg-emerald-100 px-1.5 py-0.5 text-[11px] font-semibold text-emerald-700"><span class="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>成功</span>
+            <span v-else-if="item.ok === false" class="ml-auto inline-flex items-center gap-1 rounded bg-red-100 px-1.5 py-0.5 text-[11px] font-semibold text-red-700"><span class="h-1.5 w-1.5 rounded-full bg-red-500"></span>失败</span>
           </div>
-          <div class="flex items-center gap-2">
-            <button
-              type="button"
-              @click="openCurlModal"
-              class="rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-700 transition"
-            >CURL 导入</button>
-            <button
-              type="button"
-              @click="showHistoryModal = true"
-              class="rounded-lg bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50 transition"
-            >请求历史</button>
-            <button
-              type="button"
-              @click="clearAll"
-              class="rounded-lg bg-white px-3 py-1.5 text-xs font-semibold text-red-500 ring-1 ring-red-100 hover:bg-red-50 transition"
-            >一键清空</button>
-          </div>
-        </div>
+          <div class="mt-1 truncate font-mono text-xs text-slate-700" :title="item.url">{{ item.url }}</div>
+          <div class="mt-0.5 text-[11px] text-slate-400">{{ item.time }}</div>
+        </button>
+      </div>
+    </aside>
 
-        <!-- 表单内容 -->
-        <div class="p-4">
+    <!-- 中栏：请求构建器 -->
+    <div class="flex h-full min-w-0 flex-1 flex-col rounded-2xl bg-white shadow-sm ring-1 ring-slate-200">
 
-          <!-- 请求地址 -->
-          <div class="mb-4">
-            <label class="mb-2 block text-sm font-medium">请求地址</label>
-            <div class="flex gap-2">
-              <select
-                v-model="protocol"
-                class="shrink-0 rounded-xl border border-slate-300 bg-white px-3 py-3 text-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
-              >
-                <option value="https">https://</option>
-                <option value="http">http://</option>
-              </select>
-              <input
-                v-model="url"
-                :class="urlError
-                  ? 'border-red-400 focus:border-red-400 focus:ring-red-100'
-                  : 'border-slate-300 focus:border-blue-500 focus:ring-blue-100'"
-                class="flex-1 rounded-xl border bg-white px-4 py-3 text-sm outline-none transition focus:ring-4"
-                placeholder="api.example.com"
-              >
-            </div>
-            <p v-if="urlError" class="mt-1.5 text-xs text-red-500">{{ urlError }}</p>
-          </div>
-
-          <!-- 请求方式 + 访问模式 -->
-          <div class="mb-4 grid gap-4 md:grid-cols-2">
-            <div>
-              <label class="mb-2 block text-sm font-medium">请求方式</label>
-              <div class="grid grid-cols-2 gap-2">
-                <button type="button" @click="method = 'GET'" :class="method === 'GET' ? 'border-blue-600 bg-blue-50 text-blue-700 ring-2 ring-blue-100' : 'border-slate-300 bg-white text-slate-600 hover:bg-slate-50'" class="rounded-xl border px-4 py-3 text-sm font-semibold transition">GET</button>
-                <button type="button" @click="method = 'POST'" :class="method === 'POST' ? 'border-blue-600 bg-blue-50 text-blue-700 ring-2 ring-blue-100' : 'border-slate-300 bg-white text-slate-600 hover:bg-slate-50'" class="rounded-xl border px-4 py-3 text-sm font-semibold transition">POST</button>
-              </div>
-            </div>
-            <div>
-              <label class="mb-2 block text-sm font-medium">访问模式</label>
-              <div class="grid grid-cols-2 gap-2">
-                <button type="button" @click="accessMode = 'direct'" :class="accessMode === 'direct' ? 'border-emerald-600 bg-emerald-50 text-emerald-700 ring-2 ring-emerald-100' : 'border-slate-300 bg-white text-slate-600 hover:bg-slate-50'" class="rounded-xl border px-4 py-3 text-sm font-semibold transition">本地直连</button>
-                <button type="button" @click="accessMode = 'proxy'" :class="accessMode === 'proxy' ? 'border-emerald-600 bg-emerald-50 text-emerald-700 ring-2 ring-emerald-100' : 'border-slate-300 bg-white text-slate-600 hover:bg-slate-50'" class="rounded-xl border px-4 py-3 text-sm font-semibold transition">代理转发</button>
-              </div>
-            </div>
-          </div>
-
-          <!-- 请求头 -->
-          <div class="mb-4">
-            <div class="mb-3 flex items-center justify-between gap-4">
-              <div>
-                <h3 class="text-sm font-semibold">请求头</h3>
-                <p class="text-xs text-slate-500">可不填写 用户填写 Content-Type 时会优先生效。</p>
-              </div>
-              <button type="button" @click="addHeader" class="shrink-0 rounded-lg bg-slate-900 px-3 py-2 text-sm text-white hover:bg-slate-700 transition">添加请求头</button>
-            </div>
-            <div class="space-y-2">
-              <div v-for="(item, index) in headers" :key="index" class="grid grid-cols-[1fr_1fr_auto] gap-2">
-                <input v-model="item.key" class="rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100" placeholder="Header Key">
-                <input v-model="item.value" class="rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100" placeholder="Header Value">
-                <button type="button" @click="removeHeader(index)" class="rounded-lg border border-slate-300 px-3 text-sm text-slate-500 hover:bg-slate-100">删除</button>
-              </div>
-            </div>
-          </div>
-
-          <!-- Cookie -->
-          <div class="mb-4">
-            <div class="mb-2 flex items-center justify-between">
-              <label class="text-sm font-medium">Cookie</label>
-              <button type="button" @click="cookieEnabled = !cookieEnabled" :class="cookieEnabled ? 'bg-blue-600 text-white hover:bg-blue-500' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'" class="rounded-full px-3 py-1 text-xs font-semibold transition">{{ cookieEnabled ? '已开启' : '已关闭' }}</button>
-            </div>
-            <textarea v-if="cookieEnabled" v-model="cookie" rows="3" class="w-full rounded-xl border border-slate-300 bg-white p-3 text-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100" placeholder="token=123; uid=888" />
-          </div>
-
-          <!-- 参数类型 -->
-          <div class="mb-4">
-            <label class="mb-2 block text-sm font-medium">参数类型</label>
-            <div class="grid grid-cols-3 gap-2">
-              <button type="button" @click="paramType = 'none'" :class="paramType === 'none' ? 'border-blue-600 bg-blue-50 text-blue-700 ring-2 ring-blue-100' : 'border-slate-300 bg-white text-slate-600 hover:bg-slate-50'" class="rounded-xl border px-4 py-3 text-sm font-semibold transition">无参数</button>
-              <button type="button" @click="paramType = 'form'" :class="paramType === 'form' ? 'border-blue-600 bg-blue-50 text-blue-700 ring-2 ring-blue-100' : 'border-slate-300 bg-white text-slate-600 hover:bg-slate-50'" class="rounded-xl border px-4 py-3 text-sm font-semibold transition">表单</button>
-              <button type="button" @click="paramType = 'json'" :class="paramType === 'json' ? 'border-blue-600 bg-blue-50 text-blue-700 ring-2 ring-blue-100' : 'border-slate-300 bg-white text-slate-600 hover:bg-slate-50'" class="rounded-xl border px-4 py-3 text-sm font-semibold transition">JSON</button>
-            </div>
-          </div>
-
-          <!-- 表单参数 -->
-          <div v-if="paramType === 'form'" class="mb-4">
-            <div class="mb-3 flex items-center justify-between gap-4">
-              <div>
-                <h3 class="text-sm font-semibold">表单参数</h3>
-                <p class="text-xs text-slate-500">按 key / value 添加，多行参数会自动转成表单提交</p>
-              </div>
-              <button type="button" @click="addFormParam" class="shrink-0 rounded-lg bg-slate-900 px-3 py-2 text-sm text-white hover:bg-slate-700 transition">添加参数</button>
-            </div>
-            <div class="space-y-2">
-              <div v-for="(item, index) in formParams" :key="index" class="grid grid-cols-[1fr_1fr_auto] gap-2">
-                <input v-model="item.key" class="rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100" placeholder="参数 Key">
-                <input v-model="item.value" class="rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100" placeholder="参数 Value">
-                <button type="button" @click="removeFormParam(index)" :disabled="formParams.length === 1" :class="formParams.length === 1 ? 'cursor-not-allowed text-slate-300' : 'text-slate-500 hover:bg-slate-100'" class="rounded-lg border border-slate-300 px-3 text-sm">删除</button>
-              </div>
-            </div>
-          </div>
-
-          <!-- JSON 参数 -->
-          <div v-if="paramType === 'json'" class="mb-4">
-            <div class="mb-2 flex items-center justify-between gap-4">
-              <label class="block text-sm font-medium">JSON 参数</label>
-              <label class="flex shrink-0 items-center gap-2 text-sm text-slate-600 cursor-pointer">
-                <input v-model="formatRequestJson" type="checkbox" class="h-4 w-4" @change="applyRequestJsonFormat">
-                格式化 JSON
-              </label>
-            </div>
-            <textarea :value="displayRequestJson" rows="10" class="w-full rounded-xl border border-slate-300 bg-slate-950 p-4 font-mono text-sm text-slate-100 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100" @input="jsonBody = $event.target.value" />
-          </div>
-
-          <!-- 发送 -->
+      <!-- Tab 行 + 操作按钮 -->
+      <div class="flex shrink-0 items-center justify-between border-b border-slate-100 px-3 py-2">
+        <div class="flex items-center gap-1">
           <button
             type="button"
-            @click="sendRequest"
-            :disabled="loading"
-            :class="loading ? 'cursor-not-allowed bg-slate-400' : timeout ? 'bg-orange-500 hover:bg-orange-400' : 'bg-blue-600 hover:bg-blue-500'"
-            class="w-full rounded-xl px-5 py-3 text-sm font-semibold text-white shadow-sm transition"
-          >{{ buttonText }}</button>
-
-        </div>
-      </div>
-    </div>
-
-  </div>
-
-  <!-- 请求历史弹窗 -->
-  <div v-if="showHistoryModal" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 px-4">
-    <div class="w-full max-w-5xl rounded-2xl bg-white p-6 shadow-xl">
-      <div class="mb-6 flex items-center justify-between gap-4">
-        <div>
-          <h2 class="text-lg font-semibold">请求历史</h2>
-          <p class="mt-1 text-sm text-slate-500">最近 20 条请求记录</p>
+            class="rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white"
+          >HTTP</button>
+          <button
+            type="button"
+            @click="emit('changeTab', 'ws')"
+            class="rounded-lg px-3 py-1.5 text-xs font-semibold text-slate-500 hover:text-slate-800 hover:bg-slate-50 transition"
+          >WebSocket</button>
         </div>
         <div class="flex items-center gap-2">
-          <button type="button" @click="clearHistory" class="rounded-lg bg-red-500 px-3 py-2 text-sm font-semibold text-white hover:bg-red-400 transition">清空历史</button>
-          <button type="button" @click="showHistoryModal = false" class="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-600 hover:bg-slate-100 transition">关闭</button>
+          <button
+            type="button"
+            @click="openCurlModal"
+            class="rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-700 transition"
+          >CURL 导入</button>
+          <button
+            type="button"
+            @click="clearAll"
+            class="rounded-lg bg-white px-3 py-1.5 text-xs font-semibold text-red-500 ring-1 ring-red-100 hover:bg-red-50 transition"
+          >一键清空</button>
         </div>
       </div>
-      <div v-if="historyList.length === 0" class="rounded-xl border border-dashed border-slate-300 p-12 text-center text-sm text-slate-500">暂无请求历史</div>
-      <div v-else class="overflow-hidden rounded-xl border border-slate-200">
-        <div class="grid grid-cols-[80px_1fr_120px_100px] gap-4 bg-slate-50 px-4 py-3 text-xs font-semibold text-slate-600 uppercase tracking-wide border-b border-slate-200">
-          <div>方法</div><div>请求地址</div><div>参数类型</div><div class="text-right">操作</div>
+
+      <!-- 表单内容（可滚动） -->
+      <div class="min-h-0 flex-1 overflow-y-auto p-3">
+
+        <!-- 请求地址 -->
+        <div class="mb-3">
+          <label class="mb-1.5 block text-xs font-medium text-slate-600">请求地址</label>
+          <div class="flex gap-2">
+            <select
+              v-model="protocol"
+              class="shrink-0 rounded-lg border border-slate-300 bg-white px-2.5 py-2 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+            >
+              <option value="https">https://</option>
+              <option value="http">http://</option>
+            </select>
+            <input
+              v-model="url"
+              :class="urlError
+                ? 'border-red-400 focus:border-red-400 focus:ring-red-100'
+                : 'border-slate-300 focus:border-blue-500 focus:ring-blue-100'"
+              class="flex-1 rounded-lg border bg-white px-3 py-2 text-sm outline-none transition focus:ring-2"
+              placeholder="api.example.com"
+            >
+          </div>
+          <p v-if="urlError" class="mt-1 text-xs text-red-500">{{ urlError }}</p>
         </div>
-        <div class="max-h-[600px] overflow-y-auto">
-          <div v-for="(item, index) in historyList" :key="index" class="grid grid-cols-[80px_1fr_120px_100px] gap-4 items-center px-4 py-3 border-b border-slate-100 hover:bg-slate-50 transition">
-            <div>
-              <span :class="item.method === 'POST' ? 'bg-blue-100 text-blue-700' : 'bg-emerald-100 text-emerald-700'" class="inline-block rounded-full px-2.5 py-1 text-xs font-semibold">{{ item.method }}</span>
+
+        <!-- 请求方式 + 访问模式 -->
+        <div class="mb-3 grid gap-3 md:grid-cols-2">
+          <div>
+            <label class="mb-1.5 block text-xs font-medium text-slate-600">请求方式</label>
+            <div class="grid grid-cols-2 gap-2">
+              <button type="button" @click="method = 'GET'" :class="method === 'GET' ? 'border-blue-600 bg-blue-50 text-blue-700 ring-1 ring-blue-100' : 'border-slate-300 bg-white text-slate-600 hover:bg-slate-50'" class="rounded-lg border px-3 py-2 text-sm font-semibold transition">GET</button>
+              <button type="button" @click="method = 'POST'" :class="method === 'POST' ? 'border-blue-600 bg-blue-50 text-blue-700 ring-1 ring-blue-100' : 'border-slate-300 bg-white text-slate-600 hover:bg-slate-50'" class="rounded-lg border px-3 py-2 text-sm font-semibold transition">POST</button>
             </div>
-            <div class="min-w-0">
-              <div class="truncate font-mono text-sm text-slate-800" :title="item.url">{{ item.url }}</div>
-              <div class="mt-1 text-xs text-slate-400">{{ item.time }}</div>
-            </div>
-            <div><span class="inline-block rounded-full bg-slate-100 px-2.5 py-1 text-xs text-slate-600">{{ item.paramType }}</span></div>
-            <div class="text-right">
-              <button type="button" @click="restoreHistory(index)" class="rounded-lg bg-blue-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-blue-500 transition">恢复</button>
+          </div>
+          <div>
+            <label class="mb-1.5 block text-xs font-medium text-slate-600">访问模式</label>
+            <div class="grid grid-cols-2 gap-2">
+              <button type="button" @click="accessMode = 'direct'" :class="accessMode === 'direct' ? 'border-emerald-600 bg-emerald-50 text-emerald-700 ring-1 ring-emerald-100' : 'border-slate-300 bg-white text-slate-600 hover:bg-slate-50'" class="rounded-lg border px-3 py-2 text-sm font-semibold transition">本地直连</button>
+              <button type="button" @click="accessMode = 'proxy'" :class="accessMode === 'proxy' ? 'border-emerald-600 bg-emerald-50 text-emerald-700 ring-1 ring-emerald-100' : 'border-slate-300 bg-white text-slate-600 hover:bg-slate-50'" class="rounded-lg border px-3 py-2 text-sm font-semibold transition">代理转发</button>
             </div>
           </div>
         </div>
+
+        <!-- 请求头 -->
+        <div class="mb-3">
+          <div class="mb-2 flex items-center justify-between gap-3">
+            <label class="text-xs font-medium text-slate-600">请求头<span class="ml-1 text-slate-400">可选，自填 Content-Type 优先生效</span></label>
+            <button type="button" @click="addHeader" class="shrink-0 rounded-lg bg-slate-900 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-slate-700 transition">添加</button>
+          </div>
+          <div class="space-y-2">
+            <div v-for="(item, index) in headers" :key="index" class="grid grid-cols-[1fr_1fr_auto] gap-2">
+              <input v-model="item.key" class="rounded-lg border border-slate-300 px-2.5 py-2 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100" placeholder="Header Key">
+              <input v-model="item.value" class="rounded-lg border border-slate-300 px-2.5 py-2 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100" placeholder="Header Value">
+              <button type="button" @click="removeHeader(index)" class="rounded-lg border border-slate-300 px-2.5 text-sm text-slate-500 hover:bg-slate-100">删除</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Cookie -->
+        <div class="mb-3">
+          <div class="mb-1.5 flex items-center justify-between">
+            <label class="text-xs font-medium text-slate-600">Cookie</label>
+            <button type="button" @click="cookieEnabled = !cookieEnabled" :class="cookieEnabled ? 'bg-blue-600 text-white hover:bg-blue-500' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'" class="rounded-full px-2.5 py-1 text-xs font-semibold transition">{{ cookieEnabled ? '已开启' : '已关闭' }}</button>
+          </div>
+          <textarea v-if="cookieEnabled" v-model="cookie" rows="2" class="w-full rounded-lg border border-slate-300 bg-white p-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100" placeholder="token=123; uid=888" />
+        </div>
+
+        <!-- 参数类型 -->
+        <div class="mb-3">
+          <label class="mb-1.5 block text-xs font-medium text-slate-600">参数类型</label>
+          <div class="grid grid-cols-3 gap-2">
+            <button type="button" @click="paramType = 'none'" :class="paramType === 'none' ? 'border-blue-600 bg-blue-50 text-blue-700 ring-1 ring-blue-100' : 'border-slate-300 bg-white text-slate-600 hover:bg-slate-50'" class="rounded-lg border px-3 py-2 text-sm font-semibold transition">无参数</button>
+            <button type="button" @click="paramType = 'form'" :class="paramType === 'form' ? 'border-blue-600 bg-blue-50 text-blue-700 ring-1 ring-blue-100' : 'border-slate-300 bg-white text-slate-600 hover:bg-slate-50'" class="rounded-lg border px-3 py-2 text-sm font-semibold transition">表单</button>
+            <button type="button" @click="paramType = 'json'" :class="paramType === 'json' ? 'border-blue-600 bg-blue-50 text-blue-700 ring-1 ring-blue-100' : 'border-slate-300 bg-white text-slate-600 hover:bg-slate-50'" class="rounded-lg border px-3 py-2 text-sm font-semibold transition">JSON</button>
+          </div>
+        </div>
+
+        <!-- 表单参数 -->
+        <div v-if="paramType === 'form'" class="mb-3">
+          <div class="mb-2 flex items-center justify-between gap-3">
+            <label class="text-xs font-medium text-slate-600">表单参数<span class="ml-1 text-slate-400">多行会自动转成表单提交</span></label>
+            <button type="button" @click="addFormParam" class="shrink-0 rounded-lg bg-slate-900 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-slate-700 transition">添加</button>
+          </div>
+          <div class="space-y-2">
+            <div v-for="(item, index) in formParams" :key="index" class="grid grid-cols-[1fr_1fr_auto] gap-2">
+              <input v-model="item.key" class="rounded-lg border border-slate-300 px-2.5 py-2 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100" placeholder="参数 Key">
+              <input v-model="item.value" class="rounded-lg border border-slate-300 px-2.5 py-2 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100" placeholder="参数 Value">
+              <button type="button" @click="removeFormParam(index)" :disabled="formParams.length === 1" :class="formParams.length === 1 ? 'cursor-not-allowed text-slate-300' : 'text-slate-500 hover:bg-slate-100'" class="rounded-lg border border-slate-300 px-2.5 text-sm">删除</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- JSON 参数 -->
+        <div v-if="paramType === 'json'" class="mb-3">
+          <div class="mb-1.5 flex items-center justify-between gap-3">
+            <label class="text-xs font-medium text-slate-600">JSON 参数</label>
+            <label class="flex shrink-0 items-center gap-1.5 text-xs text-slate-600 cursor-pointer">
+              <input v-model="formatRequestJson" type="checkbox" class="h-3.5 w-3.5">
+              格式化 JSON
+            </label>
+          </div>
+          <textarea :value="displayRequestJson" rows="8" class="w-full rounded-lg border border-slate-300 bg-slate-950 p-3 font-mono text-sm text-slate-100 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100" @input="jsonBody = $event.target.value" @blur="compressJson" />
+        </div>
+
+      </div>
+
+      <!-- 发送（固定底部） -->
+      <div class="shrink-0 border-t border-slate-100 p-3">
+        <button
+          type="button"
+          @click="sendRequest"
+          :disabled="loading"
+          :class="loading ? 'cursor-not-allowed bg-slate-400' : timeout ? 'bg-orange-500 hover:bg-orange-400' : 'bg-blue-600 hover:bg-blue-500'"
+          class="w-full rounded-lg px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition"
+        >{{ buttonText }}</button>
       </div>
     </div>
+
+    <!-- 右栏：返回结果 -->
+    <div class="flex h-full w-[440px] shrink-0 flex-col rounded-2xl bg-white p-3 shadow-sm ring-1 ring-slate-200">
+
+      <div class="mb-3 flex shrink-0 items-center justify-between gap-2">
+        <div class="grid grid-cols-2 gap-1 rounded-xl bg-slate-100 p-1">
+          <button
+            type="button"
+            @click="responseTab = 'body'"
+            :class="responseTab === 'body' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'"
+            class="rounded-lg px-3 py-1.5 text-xs font-semibold transition"
+          >返回结果</button>
+          <button
+            type="button"
+            @click="responseTab = 'info'"
+            :class="responseTab === 'info' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'"
+            class="rounded-lg px-3 py-1.5 text-xs font-semibold transition"
+          >请求响应</button>
+        </div>
+        <div class="flex shrink-0 items-center gap-2">
+          <template v-if="responseTab === 'body'">
+            <span v-if="copyTip" class="text-xs text-slate-500">{{ copyTip }}</span>
+            <button
+              type="button"
+              @click="copyResponse"
+              class="rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-700 transition"
+            >复制</button>
+            <label class="flex items-center gap-1.5 text-xs text-slate-600 cursor-pointer">
+              <input v-model="formatResponseJson" type="checkbox" class="h-3.5 w-3.5">
+              格式化
+            </label>
+          </template>
+          <button
+            type="button"
+            @click="response = ''; responseInfo = { status: '', statusText: '', time: '', size: '', contentType: '', url: '' }"
+            class="rounded-lg border border-slate-200 px-2.5 py-1 text-xs text-slate-500 hover:bg-slate-100 transition"
+          >清空</button>
+        </div>
+      </div>
+
+      <textarea
+        v-if="responseTab === 'body'"
+        :value="displayResponse"
+        readonly
+        class="min-h-0 flex-1 w-full resize-none rounded-xl border border-slate-300 bg-slate-950 p-3 font-mono text-sm text-slate-100 outline-none"
+        placeholder="暂无返回结果"
+      />
+      <div
+        v-else
+        class="min-h-0 flex-1 overflow-y-auto rounded-xl border border-slate-300 bg-slate-50 p-3"
+      >
+        <div class="grid grid-cols-2 gap-2">
+          <div class="rounded-lg bg-white p-3 ring-1 ring-slate-200">
+            <div class="text-xs text-slate-500">状态码</div>
+            <div :class="statusColorClass" class="mt-1 font-mono text-sm font-semibold">{{ responseInfo.status || '-' }}</div>
+          </div>
+          <div class="rounded-lg bg-white p-3 ring-1 ring-slate-200">
+            <div class="text-xs text-slate-500">状态文本</div>
+            <div class="mt-1 font-mono text-sm text-slate-900">{{ responseInfo.statusText || '-' }}</div>
+          </div>
+          <div class="rounded-lg bg-white p-3 ring-1 ring-slate-200">
+            <div class="text-xs text-slate-500">响应时间</div>
+            <div class="mt-1 font-mono text-sm text-slate-900">{{ responseInfo.time || '-' }}</div>
+          </div>
+          <div class="rounded-lg bg-white p-3 ring-1 ring-slate-200">
+            <div class="text-xs text-slate-500">响应大小</div>
+            <div class="mt-1 font-mono text-sm text-slate-900">{{ responseInfo.size || '-' }}</div>
+          </div>
+          <div class="col-span-2 rounded-lg bg-white p-3 ring-1 ring-slate-200">
+            <div class="text-xs text-slate-500">Content-Type</div>
+            <div class="mt-1 break-all font-mono text-sm text-slate-900">{{ responseInfo.contentType || '-' }}</div>
+          </div>
+          <div class="col-span-2 rounded-lg bg-white p-3 ring-1 ring-slate-200">
+            <div class="text-xs text-slate-500">最终请求地址</div>
+            <div class="mt-1 break-all font-mono text-sm text-slate-900">{{ responseInfo.url || '-' }}</div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
   </div>
 
   <!-- CURL 导入弹窗 -->
