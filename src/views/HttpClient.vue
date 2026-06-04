@@ -289,6 +289,8 @@ function importCurl() {
       if (!token.startsWith('-') && !nextUrl) nextUrl = token
     }
     if (!nextUrl) { curlError.value = '没有解析到请求地址'; return }
+    if (nextUrl.startsWith('http://')) protocol.value = 'http'
+    else if (nextUrl.startsWith('https://')) protocol.value = 'https'
     url.value = nextUrl; cookie.value = nextCookie
     headers.value = nextHeaders.length > 0 ? nextHeaders : [{ key: '', value: '' }]
     const contentTypeHeader = nextHeaders.find(item => item.key.toLowerCase() === 'content-type')
