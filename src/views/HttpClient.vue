@@ -29,6 +29,7 @@ const curlText = ref('')
 const curlError = ref('')
 const historyList = ref([])
 const copyTip = ref('')
+const showExpandModal = ref(false)
 const initialized = ref(false)
 
 watch(url, (newVal) => {
@@ -64,6 +65,60 @@ const displayResponse = computed(() => {
   if (!formatResponseJson.value) return response.value
   try { return JSON.stringify(JSON.parse(response.value), null, 2) }
   catch { return response.value }
+})
+
+function escapeHtml(text) {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+}
+
+function highlightJson(json) {
+  let html = ''
+  let i = 0
+  while (i < json.length) {
+    const ch = json[i]
+    if (ch === '"') {
+      let j = i + 1
+      const buf = [ch]
+      while (j < json.length) {
+        if (json[j] === '\\') { buf.push(json[j], json[j + 1] || ''); j += 2; continue }
+        if (json[j] === '"') { buf.push(json[j]); j++; break }
+        buf.push(json[j]); j++
+      }
+      const full = buf.join('')
+      let k = j
+      while (k < json.length && /\s/.test(json[k])) k++
+      const isKey = k < json.length && json[k] === ':'
+      html += `<span class="${isKey ? 'json-key' : 'json-string'}">${escapeHtml(full)}</span>`
+      i = j
+      continue
+    }
+    if ((ch === '-' && i + 1 < json.length && /\d/.test(json[i + 1])) || /\d/.test(ch)) {
+      let j = i, num = ''
+      while (j < json.length && /[-\d.eE+]/.test(json[j])) num += json[j++]
+      html += `<span class="json-number">${num}</span>`
+      i = j
+      continue
+    }
+    if (json.startsWith('true', i)) { html += '<span class="json-boolean">true</span>'; i += 4; continue }
+    if (json.startsWith('false', i)) { html += '<span class="json-boolean">false</span>'; i += 5; continue }
+    if (json.startsWith('null', i)) { html += '<span class="json-null">null</span>'; i += 4; continue }
+    html += escapeHtml(ch)
+    i++
+  }
+  return html
+}
+
+const highlightedResponse = computed(() => {
+  if (!response.value) return ''
+  try {
+    JSON.parse(response.value)
+    return highlightJson(displayResponse.value)
+  } catch {
+    return escapeHtml(response.value)
+  }
 })
 
 const statusColorClass = computed(() => {
@@ -562,7 +617,7 @@ async function sendRequest() {
     </div>
 
     <!-- 右栏：返回结果 -->
-    <div class="flex h-full w-[440px] shrink-0 flex-col rounded-2xl bg-white p-3 shadow-sm ring-1 ring-slate-200">
+    <div class="flex h-full w-[560px] shrink-0 flex-col rounded-2xl bg-white p-3 shadow-sm ring-1 ring-slate-200">
 
       <div class="mb-3 flex shrink-0 items-center justify-between gap-2">
         <div class="grid grid-cols-2 gap-1 rounded-xl bg-slate-100 p-1">
@@ -584,6 +639,13 @@ async function sendRequest() {
             <span v-if="copyTip" class="text-xs text-slate-500">{{ copyTip }}</span>
             <button
               type="button"
+              @click="showExpandModal = true"
+              :disabled="!response"
+              :class="response ? 'hover:bg-slate-700' : 'cursor-not-allowed opacity-50'"
+              class="rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white transition"
+            >展开</button>
+            <button
+              type="button"
               @click="copyResponse"
               class="rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-700 transition"
             >复制</button>
@@ -600,13 +662,15 @@ async function sendRequest() {
         </div>
       </div>
 
-      <textarea
-        v-if="responseTab === 'body'"
-        :value="displayResponse"
-        readonly
-        class="min-h-0 flex-1 w-full resize-none rounded-xl border border-slate-300 bg-slate-950 p-3 font-mono text-sm text-slate-100 outline-none"
-        placeholder="暂无返回结果"
+      <pre
+        v-if="responseTab === 'body' && response"
+        v-html="highlightedResponse"
+        class="min-h-0 flex-1 w-full resize-none rounded-xl border border-slate-300 bg-slate-950 p-3 font-mono text-sm text-slate-100 outline-none overflow-auto whitespace-pre-wrap break-all"
       />
+      <div
+        v-else-if="responseTab === 'body'"
+        class="min-h-0 flex-1 w-full resize-none rounded-xl border border-slate-300 bg-slate-950 p-3 font-mono text-sm text-slate-500 select-none"
+      >暂无返回结果</div>
       <div
         v-else
         class="min-h-0 flex-1 overflow-y-auto rounded-xl border border-slate-300 bg-slate-50 p-3"
@@ -643,23 +707,158 @@ async function sendRequest() {
 
   </div>
 
-  <!-- CURL 导入弹窗 -->
-  <div v-if="showCurlModal" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 px-4">
-    <div class="w-full max-w-3xl rounded-2xl bg-white p-6 shadow-xl">
-      <div class="mb-4 flex items-center justify-between gap-4">
+  <!-- 展开返回结果弹窗 -->
+  <div
+    :class="showExpandModal ? 'modal-show' : ''"
+    class="modal-mask"
+    @click.self="showExpandModal = false"
+  >
+    <div class="modal-expand" role="dialog" aria-modal="true">
+      <div class="modal-head">
         <div>
-          <h2 class="text-lg font-semibold">CURL 导入</h2>
-          <p class="mt-1 text-sm text-slate-500">粘贴 curl 命令后，会自动填充 URL、请求方式、请求头、Cookie 和参数</p>
+          <h3>返回结果</h3>
+          <p v-if="responseInfo.status" class="mt-1 text-xs text-slate-400">
+            {{ responseInfo.status }} {{ responseInfo.statusText }} · {{ responseInfo.time }} · {{ responseInfo.size }}
+          </p>
         </div>
-        <button type="button" @click="closeCurlModal" class="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-600 hover:bg-slate-100">关闭</button>
+        <button
+          type="button"
+          @click="showExpandModal = false"
+          class="rounded-lg border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-100 transition"
+        >关闭</button>
       </div>
-      <textarea v-model="curlText" rows="12" class="w-full rounded-xl border border-slate-300 bg-slate-950 p-4 font-mono text-sm text-slate-100 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100" placeholder="curl 'https://api.example.com/user' -H 'Authorization: Bearer xxx' -H 'Content-Type: application/json' --data '{&quot;id&quot;:1}'" />
-      <p v-if="curlError" class="mt-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600">{{ curlError }}</p>
-      <div class="mt-5 flex justify-end gap-3">
-        <button type="button" @click="closeCurlModal" class="rounded-xl border border-slate-300 px-5 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-100">取消</button>
-        <button type="button" @click="importCurl" class="rounded-xl bg-blue-600 px-5 py-2 text-sm font-semibold text-white hover:bg-blue-500">导入</button>
+      <div class="modal-body">
+        <pre
+          v-if="response"
+          v-html="highlightedResponse"
+          class="w-full rounded-xl bg-slate-950 p-5 font-mono text-sm text-slate-100 overflow-auto whitespace-pre-wrap break-all"
+        />
+        <div
+          v-else
+          class="flex items-center justify-center rounded-xl border border-dashed border-slate-200 bg-slate-50 py-24 text-sm text-slate-400"
+        >暂无返回结果</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- CURL 导入弹窗 -->
+  <div
+    :class="showCurlModal ? 'modal-show' : ''"
+    class="modal-mask"
+    @click.self="closeCurlModal"
+  >
+    <div class="modal-expand" role="dialog" aria-modal="true">
+      <div class="modal-head">
+        <div>
+          <h3>CURL 导入</h3>
+          <p class="mt-1 text-xs text-slate-400">粘贴 curl 命令后，会自动填充 URL、请求方式、请求头、Cookie 和参数</p>
+        </div>
+        <button
+          type="button"
+          @click="closeCurlModal"
+          class="rounded-lg border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-100 transition"
+        >关闭</button>
+      </div>
+      <div class="modal-body">
+        <textarea
+          v-model="curlText"
+          rows="14"
+          class="w-full rounded-xl border border-slate-300 bg-slate-950 p-4 font-mono text-sm text-slate-100 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+          placeholder="curl 'https://api.example.com/user' -H 'Authorization: Bearer xxx' -H 'Content-Type: application/json' --data '{&quot;id&quot;:1}'"
+        />
+        <p v-if="curlError" class="mt-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600">{{ curlError }}</p>
+        <div class="mt-5 flex justify-end gap-3">
+          <button type="button" @click="closeCurlModal" class="rounded-xl border border-slate-300 px-5 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-100">取消</button>
+          <button type="button" @click="importCurl" class="rounded-xl bg-blue-600 px-5 py-2 text-sm font-semibold text-white hover:bg-blue-500">导入</button>
+        </div>
       </div>
     </div>
   </div>
   </div>
 </template>
+
+<style>
+.json-key        { color: #93c5fd; }  /* blue-300 */
+.json-string     { color: #86efac; }  /* green-300 */
+.json-number     { color: #fdba74; }  /* orange-300 */
+.json-boolean    { color: #c4b5fd; }  /* violet-300 */
+.json-null       { color: #94a3b8; }  /* slate-400 */
+
+.modal-mask {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(15, 23, 42, 0);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  z-index: 100;
+  transition:
+    opacity .26s cubic-bezier(.2, .8, .2, 1),
+    visibility .26s cubic-bezier(.2, .8, .2, 1),
+    background .26s cubic-bezier(.2, .8, .2, 1);
+}
+
+.modal-mask.modal-show {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  background: rgba(15, 23, 42, .42);
+}
+
+.modal-expand {
+  width: min(960px, 100%);
+  max-height: min(760px, calc(100vh - 40px));
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  border-radius: 22px;
+  box-shadow: 0 28px 90px rgba(15, 23, 42, .28);
+  overflow: hidden;
+  transform: scale(.72);
+  opacity: 0;
+}
+
+.modal-mask.modal-show .modal-expand {
+  opacity: 1;
+  animation: iosAlertPop .42s cubic-bezier(.18, .89, .32, 1.28) both;
+}
+
+@keyframes iosAlertPop {
+  0%   { transform: scale(.72); opacity: 0; }
+  55%  { transform: scale(1.035); opacity: 1; }
+  78%  { transform: scale(.985); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+.modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 18px 20px;
+  border-bottom: 1px solid #e6eaf0;
+}
+
+.modal-head h3 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.modal-body {
+  padding: 16px 20px 20px;
+  overflow: auto;
+  min-height: 0;
+  flex: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .modal-mask,
+  .modal-expand {
+    transition: none !important;
+  }
+}
+</style>
